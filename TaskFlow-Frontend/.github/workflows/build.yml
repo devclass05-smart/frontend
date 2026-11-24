@@ -1,0 +1,23 @@
+name: Build and publish
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore
+        run: dotnet restore DevOpsTasks.Frontend/DevOpsTasks.Frontend.csproj
+      - name: Build
+        run: dotnet build DevOpsTasks.Frontend/DevOpsTasks.Frontend.csproj -c Release --no-restore
+      - name: Publish
+        run: dotnet publish DevOpsTasks.Frontend/DevOpsTasks.Frontend.csproj -c Release -o publish
+      - uses: actions/upload-artifact@v4
+        with:
+          name: taskflow-frontend-publish
+          path: publish/

@@ -1,0 +1,23 @@
+# .NET build files
+**/bin/
+**/obj/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+
+# VS Code / Rider
+.vscode/
+.idea/
+
+# Deployment output
+publish/
+TaskFlowDeploy/
+
+# Sensitive configuration
+**/appsettings.Production.json
+
+# Logs and temporary files
+*.log
+*.tmp

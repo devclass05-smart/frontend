@@ -1,0 +1,207 @@
+@page "/"
+@inject TaskApiClient Api
+@implements IDisposable
+
+<PageTitle>Dashboard | TaskFlow</PageTitle>
+
+<div class="heading-row">
+    <div>
+        <p class="eyebrow">WORKSPACE / OVERVIEW</p>
+        <h1>Your work, in one place.</h1>
+        <p class="subtitle">Create, prioritize and track your DevOps tasks in real time.</p>
+    </div>
+    <button class="button ghost refresh" @onclick="LoadAsync" disabled="@busy">↻ Refresh</button>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(error))
+{
+    <div class="alert" role="alert"><strong>Connection or save error</strong><div>@error</div></div>
+}
+@if (!string.IsNullOrWhiteSpace(message))
+{
+    <div class="notice" role="status">@message</div>
+}
+
+<section class="stats-grid" aria-label="Task summary">
+    <div class="stat-card"><span class="stat-icon violet">◫</span><span class="stat-label">Total tasks</span><strong>@tasks.Count</strong><small>All tasks in PostgreSQL</small></div>
+    <div class="stat-card"><span class="stat-icon blue">◷</span><span class="stat-label">To do</span><strong>@tasks.Count(x => x.Status == "Todo")</strong><small>Not started yet</small></div>
+    <div class="stat-card"><span class="stat-icon amber">◑</span><span class="stat-label">In progress</span><strong>@tasks.Count(x => x.Status == "InProgress")</strong><small>Currently active</small></div>
+    <div class="stat-card"><span class="stat-icon green">✓</span><span class="stat-label">Completed</span><strong>@tasks.Count(x => x.Status == "Done")</strong><small>Finished work</small></div>
+</section>
+
+<div class="workspace-grid">
+    <section class="panel editor-panel">
+        <div class="panel-heading">
+            <div><p class="eyebrow">@((editingId is null) ? "NEW TASK" : "EDIT TASK")</p><h2>@((editingId is null) ? "Add a task" : "Update task")</h2></div>
+            <span class="panel-symbol">✎</span>
+        </div>
+        <EditForm Model="@draft" OnValidSubmit="SaveAsync" FormName="task-form">
+            <DataAnnotationsValidator />
+            <div class="field">
+                <label for="task-title">Task title <span class="required">*</span></label>
+                <InputText id="task-title" class="control" @bind-Value="draft.Title" placeholder="e.g. Set up monitoring" />
+                <ValidationMessage For="@(() => draft.Title)" />
+            </div>
+            <div class="field">
+                <label for="task-description">Description</label>
+                <InputTextArea id="task-description" class="control textarea" @bind-Value="draft.Description" placeholder="What needs to get done?" />
+                <ValidationMessage For="@(() => draft.Description)" />
+            </div>
+            <div class="two-fields">
+                <div class="field">
+                    <label for="task-priority">Priority</label>
+                    <InputSelect id="task-priority" class="control" @bind-Value="draft.Priority">
+                        <option value="Low">Low</option><option value="Medium">Medium</option><option value="High">High</option>
+                    </InputSelect>
+                </div>
+                <div class="field">
+                    <label for="task-status">Status</label>
+                    <InputSelect id="task-status" class="control" @bind-Value="draft.Status">
+                        <option value="Todo">To do</option><option value="InProgress">In progress</option><option value="Done">Completed</option>
+                    </InputSelect>
+                </div>
+            </div>
+            <button class="button primary submit" type="submit" disabled="@busy">@((busy) ? "Saving…" : (editingId is null ? "+ Create task" : "Save changes"))</button>
+            @if (editingId is not null)
+            {
+                <button class="button ghost cancel" type="button" @onclick="CancelEdit" disabled="@busy">Cancel edit</button>
+            }
+        </EditForm>
+    </section>
+
+    <section class="panel list-panel">
+        <div class="panel-heading list-heading"><div><p class="eyebrow">TASK LIST</p><h2>All tasks <span class="count-pill">@FilteredTasks.Count()</span></h2></div></div>
+        <div class="filter-row">
+            <input class="control search" type="search" placeholder="Search tasks…" aria-label="Search tasks" @bind="search" @bind:event="oninput" />
+            <select class="control filter" aria-label="Filter tasks by status" @bind="filter">
+                <option value="All">All statuses</option><option value="Todo">To do</option><option value="InProgress">In progress</option><option value="Done">Completed</option>
+            </select>
+        </div>
+        @if (loading)
+        {
+            <div class="empty-state">Loading tasks from PostgreSQL…</div>
+        }
+        else if (!FilteredTasks.Any())
+        {
+            <div class="empty-state"><span class="empty-icon">◎</span><strong>No tasks found</strong><p>Create a task or adjust your search.</p></div>
+        }
+        else
+        {
+            <div class="task-list">
+                @foreach (var task in FilteredTasks)
+                {
+                    <article class="task-card" @key="task.Id">
+                        <div class="task-main">
+                            <div class="task-title-row"><h3>@task.Title</h3><span class="priority @PriorityCss(task.Priority)">@task.Priority</span></div>
+                            @if (!string.IsNullOrWhiteSpace(task.Description))
+                            {
+                                <p class="description">@task.Description</p>
+                            }
+                            <div class="task-meta"><span class="status @StatusCss(task.Status)"><span class="status-dot"></span>@StatusLabel(task.Status)</span><span class="created">Created @task.CreatedAt.LocalDateTime.ToString("dd MMM yyyy")</span></div>
+                        </div>
+                        <div class="task-actions"><button class="text-button" @onclick="() => Edit(task)" disabled="@busy">Edit</button><button class="text-button danger" @onclick="() => DeleteAsync(task)" disabled="@busy">Delete</button></div>
+                    </article>
+                }
+            </div>
+        }
+    </section>
+</div>
+
+@code {
+    private List<WorkTask> tasks = [];
+    private SaveTaskRequest draft = new();
+    private int? editingId;
+    private string search = "";
+    private string filter = "All";
+    private string? error;
+    private string? message;
+    private bool loading = true;
+    private bool busy;
+    private bool disposed;
+
+    private IEnumerable<WorkTask> FilteredTasks => tasks
+        .Where(x => filter == "All" || x.Status == filter)
+        .Where(x => string.IsNullOrWhiteSpace(search)
+            || x.Title.Contains(search, StringComparison.OrdinalIgnoreCase)
+            || x.Description.Contains(search, StringComparison.OrdinalIgnoreCase))
+        .OrderByDescending(x => x.CreatedAt)
+        .ThenByDescending(x => x.Id);
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        loading = true;
+        error = null;
+        try { tasks = await Api.GetAllAsync(); }
+        catch (Exception ex) { error = UserFriendlyError(ex); }
+        finally { loading = false; if (!disposed) StateHasChanged(); }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (busy) return;
+        busy = true;
+        error = null;
+        message = null;
+        try
+        {
+            if (editingId is int id)
+            {
+                await Api.UpdateAsync(id, draft);
+                message = "Task updated successfully.";
+            }
+            else
+            {
+                await Api.CreateAsync(draft);
+                message = "Task created successfully.";
+            }
+            CancelEdit();
+            tasks = await Api.GetAllAsync();
+        }
+        catch (Exception ex) { error = UserFriendlyError(ex); }
+        finally { busy = false; }
+    }
+
+    private void Edit(WorkTask task)
+    {
+        editingId = task.Id;
+        draft = new SaveTaskRequest { Title = task.Title, Description = task.Description, Status = task.Status, Priority = task.Priority };
+        error = null;
+        message = null;
+    }
+
+    private void CancelEdit()
+    {
+        editingId = null;
+        draft = new SaveTaskRequest();
+    }
+
+    private async Task DeleteAsync(WorkTask task)
+    {
+        if (busy) return;
+        busy = true;
+        error = null;
+        message = null;
+        try
+        {
+            await Api.DeleteAsync(task.Id);
+            if (editingId == task.Id) CancelEdit();
+            tasks = await Api.GetAllAsync();
+            message = $"Deleted '{task.Title}'.";
+        }
+        catch (Exception ex) { error = UserFriendlyError(ex); }
+        finally { busy = false; }
+    }
+
+    private static string UserFriendlyError(Exception ex)
+        => ex is HttpRequestException
+            ? "Cannot reach the API or the API rejected the request. Check its address, PostgreSQL and CORS/proxy settings. " + ex.Message
+            : ex.Message;
+
+    private static string StatusLabel(string status) => status switch { "Todo" => "To do", "InProgress" => "In progress", "Done" => "Completed", _ => status };
+    private static string StatusCss(string status) => status switch { "Todo" => "todo", "InProgress" => "progress", "Done" => "done", _ => "" };
+    private static string PriorityCss(string priority) => priority switch { "Low" => "low", "Medium" => "medium", "High" => "high", _ => "" };
+
+    public void Dispose() => disposed = true;
+}
